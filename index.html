@@ -275,7 +275,6 @@
             </div>
         </div>
         <div class="h-right">
-            <button class="pill" id="lang-btn" onclick="toggleMicLang()" title="Toggle mic language">🎤 한국어</button>
             <button class="icon-sm" onclick="newChat()"   title="New conversation">↺</button>
             <button class="icon-sm" onclick="changeKey()" title="Change API key">⚙</button>
         </div>
@@ -285,8 +284,9 @@
     <div id="status"></div>
 
     <div id="input-row">
-        <button class="ctrl" id="mic-btn"  onclick="toggleMic()"  title="Voice input">🎤</button>
-        <textarea id="msg-input" placeholder="한국어로 대답하세요…" rows="1"
+        <button class="ctrl" id="lang-btn" onclick="toggleMicLang()" title="Switch mic language">한</button>
+        <button class="ctrl" id="mic-btn"  onclick="toggleMic()"  title="Tap to start, tap again to send">🎤</button>
+        <textarea id="msg-input" placeholder="한국어로 대답하세요… (English words OK too)" rows="1"
             onkeydown="onKey(event)" oninput="grow(this)"></textarea>
         <button class="ctrl" id="send-btn" onclick="send()" title="Send">➤</button>
     </div>
@@ -315,7 +315,9 @@ STRICT RULES:
 4. If the student makes a grammar mistake, correct it gently. Use this exact format:
    ✏️ 수정 (Correction): "[their text]" → "[corrected text]"
    Then add one short English sentence explaining why.
-5. If the student uses an English word, naturally provide the Korean word in your response.
+5. The student may mix English words into their Korean sentences when they don't know a word (e.g., "나는 school에 가요"). This is encouraged! When they do:
+   - Fill in the Korean word naturally in your response: "맞아요! 학교 (school) — 나는 학교에 가요."
+   - Praise them for trying and keep the conversation going.
 6. React warmly to their answer before asking the next question.
 7. Use encouraging phrases: 잘했어요! 맞아요! 훌륭해요! 좋아요!
 8. Never repeat the same question you just asked.
@@ -453,19 +455,10 @@ function speakKo(rawText) {
                 interim += e.results[i][0].transcript;
             }
         }
-        // Show live text in the box
+        // Show live text in the box — no auto-send, user taps mic again to submit
         const inp = document.getElementById('msg-input');
         inp.value = finalText + interim;
         grow(inp);
-
-        // Auto-send 3 seconds after the last confirmed word
-        // (gives time to keep talking — cancel if more speech arrives)
-        if (e.results[e.results.length - 1].isFinal) {
-            clearTimeout(sendTimer);
-            sendTimer = setTimeout(() => {
-                if (listening) stopMicAndSend();
-            }, 3000);
-        }
     };
 
     recog.onerror = e => {
@@ -518,9 +511,9 @@ function toggleMicLang() {
     micLang = micLang === 'ko-KR' ? 'en-US' : 'ko-KR';
     const isKo = micLang === 'ko-KR';
     const btn  = document.getElementById('lang-btn');
-    btn.textContent = isKo ? '🎤 한국어' : '🎤 English';
+    btn.textContent = isKo ? '한' : 'EN';
     btn.classList.toggle('on', !isKo);
-    setStatus(`Mic: ${isKo ? 'Korean' : 'English'}`, 'purple');
+    setStatus(`Mic switched to ${isKo ? 'Korean' : 'English'}`, 'purple');
     setTimeout(() => setStatus(''), 2000);
 }
 
