@@ -113,11 +113,20 @@
         }
         .icon-sm:hover { color: var(--accent-light); }
 
+        /* ── App shell — must be flex column so #chat can scroll ── */
+        #app {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+        }
+
         /* ── Chat ── */
         #chat {
             flex: 1; overflow-y: auto;
             padding: 14px 12px;
             display: flex; flex-direction: column; gap: 14px;
+            min-height: 0; /* lets flex child overflow-scroll instead of expanding */
         }
         #chat::-webkit-scrollbar { width: 3px; }
         #chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -321,12 +330,14 @@ RESPONSE FORMAT EXAMPLE:
 // STATE
 // ═══════════════════════════════════════════════════════
 
-let apiKey    = localStorage.getItem('suji_ak') || '';
-let history   = [];
-let micLang   = 'ko-KR';
-let listening = false;
-let recog     = null;
-let koVoice   = null;
+let apiKey     = localStorage.getItem('suji_ak') || '';
+let history    = [];
+let micLang    = 'ko-KR';
+let listening  = false;
+let recog      = null;
+let koVoice    = null;
+let finalText  = '';   // accumulates final STT chunks
+let sendTimer  = null; // auto-send after silence
 
 // ═══════════════════════════════════════════════════════
 // BOOT / API KEY
@@ -430,42 +441,77 @@ function speakKo(rawText) {
         return;
     }
     recog = new SR();
-    recog.continuous      = false;
-    recog.interimResults  = false;
+    recog.continuous     = true;  // keep listening through thinking pauses
+    recog.interimResults = true;  // show words appearing in real-time
 
     recog.onresult = e => {
-        const t = e.results[0][0].transcript;
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+            if (e.results[i].isFinal) {
+                finalText += e.results[i][0].transcript;
+            } else {
+                interim += e.results[i][0].transcript;
+            }
+        }
+        // Show live text in the box
         const inp = document.getElementById('msg-input');
-        inp.value = t;
+        inp.value = finalText + interim;
         grow(inp);
-        stopMic();
-        setTimeout(send, 200);
+
+        // Auto-send 3 seconds after the last confirmed word
+        // (gives time to keep talking — cancel if more speech arrives)
+        if (e.results[e.results.length - 1].isFinal) {
+            clearTimeout(sendTimer);
+            sendTimer = setTimeout(() => {
+                if (listening) stopMicAndSend();
+            }, 3000);
+        }
     };
+
     recog.onerror = e => {
+        clearTimeout(sendTimer);
         stopMic();
-        const msgs = { 'no-speech': 'No speech detected — try again.', 'not-allowed': 'Microphone access denied.' };
+        const msgs = { 'no-speech': 'No speech — try again.', 'not-allowed': 'Microphone access denied.' };
         setStatus(msgs[e.error] || 'Mic error: ' + e.error, 'red');
         setTimeout(() => setStatus(''), 3000);
     };
-    recog.onend = () => { if (listening) stopMic(); };
+
+    // Chrome stops recognition after ~60s; restart automatically if still listening
+    recog.onend = () => {
+        if (listening) { try { recog.start(); } catch {} }
+    };
 })();
 
-function toggleMic() { listening ? stopMic() : startMic(); }
+function toggleMic() { listening ? stopMicAndSend() : startMic(); }
 
 function startMic() {
     if (!recog) return;
+    finalText = '';
+    clearTimeout(sendTimer);
+    document.getElementById('msg-input').value = '';
     recog.lang = micLang;
     try { recog.start(); } catch { return; }
     listening = true;
     document.getElementById('mic-btn').classList.add('on');
-    setStatus(`Listening in ${micLang === 'ko-KR' ? '한국어' : 'English'}…`, 'purple');
+    setStatus(`🎤 Listening… tap mic again when done`, 'purple');
 }
 
 function stopMic() {
-    if (recog) recog.abort();
+    clearTimeout(sendTimer);
     listening = false;
+    if (recog) recog.abort();
     document.getElementById('mic-btn').classList.remove('on');
     setStatus('');
+}
+
+function stopMicAndSend() {
+    clearTimeout(sendTimer);
+    listening = false;
+    if (recog) recog.abort();
+    document.getElementById('mic-btn').classList.remove('on');
+    setStatus('');
+    const inp = document.getElementById('msg-input');
+    if (inp.value.trim()) setTimeout(send, 100);
 }
 
 function toggleMicLang() {
