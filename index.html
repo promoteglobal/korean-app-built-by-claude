@@ -286,9 +286,9 @@
     <div id="input-row">
         <button class="ctrl" id="lang-btn" onclick="toggleMicLang()" title="Switch mic language">한</button>
         <button class="ctrl" id="mic-btn"  onclick="toggleMic()"  title="Tap to start, tap again to send">🎤</button>
-        <textarea id="msg-input" placeholder="한국어로 대답하세요… (English words OK too)" rows="1"
-            onkeydown="onKey(event)" oninput="grow(this)"></textarea>
         <button class="ctrl" id="send-btn" onclick="send()" title="Send">➤</button>
+        <textarea id="msg-input" placeholder="한국어로 대답하세요… (English OK too)" rows="1"
+            onkeydown="onKey(event)" oninput="grow(this)"></textarea>
     </div>
 </div>
 
@@ -431,6 +431,25 @@ function speakKo(rawText) {
     return utt;
 }
 
+// Speak Korean TTS, then auto-start mic once it finishes
+// (stops mic first so TTS audio can't feed back into recognition)
+function autoPlayAndListen(text) {
+    if (listening) stopMic();
+    const utt = speakKo(text);
+    const onDone = () => {
+        const inp = document.getElementById('msg-input');
+        if (!listening && !inp.value.trim() && recog) {
+            setTimeout(startMic, 600);
+        }
+    };
+    if (utt) {
+        utt.onend  = onDone;
+        utt.onerror = onDone;
+    } else {
+        onDone();
+    }
+}
+
 // ═══════════════════════════════════════════════════════
 // SPEECH RECOGNITION
 // ═══════════════════════════════════════════════════════
@@ -479,14 +498,17 @@ function toggleMic() { listening ? stopMicAndSend() : startMic(); }
 
 function startMic() {
     if (!recog) return;
+    // Always start fresh — clear any leftover text from previous session
     finalText = '';
     clearTimeout(sendTimer);
-    document.getElementById('msg-input').value = '';
+    const inp = document.getElementById('msg-input');
+    inp.value = '';
+    inp.style.height = 'auto';
     recog.lang = micLang;
     try { recog.start(); } catch { return; }
     listening = true;
     document.getElementById('mic-btn').classList.add('on');
-    setStatus(`🎤 Listening… tap mic again when done`, 'purple');
+    setStatus(`🎤 Your turn — tap 🎤 again when done`, 'purple');
 }
 
 function stopMic() {
@@ -606,7 +628,7 @@ function addMsg(role, text, autoPlay = false) {
     chat.appendChild(row);
     scrollBottom();
 
-    if (autoPlay) setTimeout(() => speakKo(text), 280);
+    if (autoPlay) setTimeout(() => autoPlayAndListen(text), 280);
 }
 
 function addTyping() {
