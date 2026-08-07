@@ -21,6 +21,22 @@ in `index.html` now pins short 해요체 sentences and beginner-only grammar.)
 - Keys were ROTATED during the Aug-2026 security review (old Korean-app key
   deleted). Never hardcode a key in `index.html`.
 
+## Conversation memory (added 2026-08-07)
+The chat persists in `localStorage` under `suji_hist`, so Suji continues
+across refreshes instead of replaying the same "what's your name?" opener.
+- `boot()` restores + repaints, then `resumeChat()` sends `SEED_RESUME` so she
+  welcomes the student back by name and asks a NEW question.
+- `needsResume()` suppresses that call when the last user turn was itself a
+  seed — refreshing repeatedly must not stack greetings or spend calls.
+- `SEED_FIRST`/`SEED_RESUME` are internal prompts: they go in `history` (the
+  model needs them) but `renderHistory()` skips them as chat bubbles.
+- `trimHistory()` caps at `HIST_MAX` 40 messages, always keeping the first
+  `HIST_HEAD` 6. Head-keeping is load-bearing twice: name/city are
+  established there, AND the API requires `history[0]` to have role `user`.
+- ↺ (`newChat`) calls `clearHistory()` — it must wipe localStorage too, or
+  the "forgotten" conversation returns on the next refresh.
+- Memory is per-origin: localhost and github.io keep separate conversations.
+
 ## Read before changing behavior
 `.claude\memory\project_korean_app.md` — full feature list and decisions
 (new Claude sessions do NOT auto-load it; read it manually). Highlights:

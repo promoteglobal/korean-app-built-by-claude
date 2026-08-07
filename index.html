@@ -358,7 +358,20 @@ STRICT RULES:
     (What do you do on the weekend?)
 6. React warmly to their answer before asking the next question.
 7. Use encouraging phrases: 잘했어요! 맞아요! 훌륭해요! 좋아요!
-8. Never repeat the same question you just asked.
+8. MEMORY — this conversation CONTINUES across days. Remember what the student
+   tells you: their name, city, family, job or school, hobbies, what they did
+   recently. Refer back to it naturally, the way a friend would:
+   "민수 씨! 부산에 살아요, 맞죠?" (Minsu! You live in Busan, right?)
+   Never ask for something they have already told you. If you already know
+   their name, USE it instead of asking again.
+9. NEVER repeat a question you have asked anywhere earlier in this
+   conversation — not just the previous turn. Each turn moves to a NEW topic.
+   Rotate widely: food, weather, family, work, school, hobbies, weekends,
+   travel, pets, music, movies, sports, seasons, shopping, daily routine,
+   health, friends, childhood, favourite places, plans for tomorrow.
+   If a topic came up before, take a NEW angle on it rather than repeating
+   the same question (already asked "무슨 음식을 좋아해요?" → later ask
+   "어제 저녁에 뭐 먹었어요?").
 
 RESPONSE FORMAT EXAMPLE:
 잘했어요! 저도 주말에 공부해요. 😊
@@ -376,6 +389,21 @@ let micLang    = 'ko-KR';
 let listening  = false;
 let recog      = null;
 let koVoice    = null;
+// ── Conversation persistence ────────────────────────────
+// The chat is saved to localStorage so Suji carries on across refreshes
+// instead of restarting the same "what's your name?" opener every time.
+const HIST_KEY  = 'suji_hist';
+const HIST_MAX  = 40;  // messages kept in full (~20 exchanges)
+const HIST_HEAD = 6;   // opening turns are always kept — name/city live there
+
+// Internal prompts we send but never display as chat bubbles
+const SEED_FIRST  = 'Please greet me warmly and ask your first question.';
+const SEED_RESUME = '[The student has come back for a new session. Greet them '
+    + 'back warmly — use their name if you know it, and mention something you '
+    + 'already know about them. Then ask ONE new question. Do NOT repeat any '
+    + 'question you have already asked in this conversation.]';
+const isSeed = t => t === SEED_FIRST || t === SEED_RESUME;
+
 let finalText  = '';   // accumulates final STT chunks
 let inpPrevLen = 0;    // last known input length — lets us detect a user deletion
 let sendTimer  = null; // auto-send after silence
@@ -388,7 +416,10 @@ function boot() {
     document.getElementById('modal').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     loadVoices();
-    greet();
+    history = loadHistory();
+    // Continue where we left off if there's a saved conversation
+    if (history.length) { renderHistory(); if (needsResume()) resumeChat(); }
+    else greet();
 }
 
 function initApp() {
@@ -414,8 +445,10 @@ function changeKey() {
 }
 
 function newChat() {
-    if (history.length && !confirm('Start a new conversation?')) return;
-    history = [];
+    if (history.length && !confirm(
+        'Start over? Suji will forget your name and everything else '
+        + 'you have told her.')) return;
+    clearHistory();
     document.getElementById('chat').innerHTML = '';
     greet();
 }
@@ -787,17 +820,86 @@ async function callAPI(msgs) {
 // CONVERSATION
 // ═══════════════════════════════════════════════════════
 
+function saveHistory() {
+    try { localStorage.setItem(HIST_KEY, JSON.stringify(history)); }
+    catch {}   // quota / private mode — memory still works for this session
+}
+
+function loadHistory() {
+    try {
+        const h = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+        if (!Array.isArray(h)) return [];
+        // Drop anything malformed; a bad entry would 400 the whole request
+        return h.filter(m => m && typeof m.content === 'string' && m.content
+                          && (m.role === 'user' || m.role === 'assistant'));
+    } catch { return []; }
+}
+
+function clearHistory() {
+    history = [];
+    try { localStorage.removeItem(HIST_KEY); } catch {}
+}
+
+// Every turn re-sends the whole history, so cap it. Keep the opening turns
+// (where name/city get established) plus the most recent exchanges. Slicing
+// from the head also keeps history[0] as the seed 'user' message, which the
+// API requires — the first message must have role 'user'.
+function trimHistory() {
+    if (history.length <= HIST_MAX) return;
+    history = [...history.slice(0, HIST_HEAD),
+               ...history.slice(-(HIST_MAX - HIST_HEAD))];
+}
+
+// Repaint a restored conversation. autoPlay is off — we don't want the whole
+// backlog read aloud on every refresh.
+function renderHistory() {
+    document.getElementById('chat').innerHTML = '';
+    for (const m of history) {
+        if (m.role === 'user' && isSeed(m.content)) continue;
+        addMsg(m.role === 'assistant' ? 'ai' : 'user', m.content, false);
+    }
+}
+
 async function greet() {
     addTyping();
-    const seed = [{ role: 'user', content: 'Please greet me warmly and ask your first question.' }];
+    const seed = [{ role: 'user', content: SEED_FIRST }];
     try {
         const reply = await callAPI(seed);
         // Seed message becomes part of history so context is coherent
         history = [...seed, { role: 'assistant', content: reply }];
+        saveHistory();
         removeTyping();
         addMsg('ai', reply, true);
     } catch(e) {
         removeTyping();
+        setStatus('Connection failed — ' + e.message, 'red');
+    }
+}
+
+// Only greet again if the student actually said something since the last
+// greeting. Refreshing three times in a row shouldn't stack three hellos
+// or spend three API calls.
+function needsResume() {
+    for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].role === 'user') return !isSeed(history[i].content);
+    }
+    return true;
+}
+
+// Continue a restored conversation: welcome back by name, new question.
+async function resumeChat() {
+    addTyping();
+    history.push({ role: 'user', content: SEED_RESUME });
+    try {
+        const reply = await callAPI(history);
+        history.push({ role: 'assistant', content: reply });
+        trimHistory();
+        saveHistory();
+        removeTyping();
+        addMsg('ai', reply, true);
+    } catch(e) {
+        removeTyping();
+        history.pop();   // drop the seed we never got an answer to
         setStatus('Connection failed — ' + e.message, 'red');
     }
 }
@@ -820,11 +922,14 @@ async function send() {
     try {
         const reply = await callAPI(history);
         history.push({ role: 'assistant', content: reply });
+        trimHistory();
+        saveHistory();
         removeTyping();
         addMsg('ai', reply, true);
     } catch(e) {
         removeTyping();
         history.pop();
+        saveHistory();
         setStatus('Error — ' + e.message, 'red');
         setTimeout(() => setStatus(''), 4000);
     }
