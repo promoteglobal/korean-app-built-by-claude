@@ -165,6 +165,7 @@
         .bubble .en         { color: var(--text-2); font-size: .87rem; }
         .bubble .fix-label  { color: #f87171; font-weight: 700; font-size: .83rem; margin-top: 6px; display: block; }
         .bubble .fix-good   { color: #86efac; font-style: italic; }
+        .bubble .teach-label{ color: #7dd3fc; font-weight: 700; font-size: .83rem; }
 
         /* Play button */
         .play-btn {
@@ -271,7 +272,7 @@
             <div class="avatar">🌸</div>
             <div>
                 <div class="tname">수지 선생님</div>
-                <div class="tsub">TOPIK Level 2 · Korean Conversation</div>
+                <div class="tsub">TOPIK Level 1 · Korean Conversation</div>
             </div>
         </div>
         <div class="h-right">
@@ -285,10 +286,10 @@
 
     <div id="input-row">
         <button class="ctrl" id="lang-btn" onclick="toggleMicLang()" title="Switch mic language">한</button>
-        <button class="ctrl" id="mic-btn"  onclick="toggleMic()"  title="Tap to start, tap again to send">🎤</button>
+        <button class="ctrl" id="mic-btn"  onclick="toggleMic()"  title="Start / stop listening (does not send)">🎤</button>
         <button class="ctrl" id="send-btn" onclick="send()" title="Send">➤</button>
         <textarea id="msg-input" placeholder="한국어로 대답하세요… (English OK too)" rows="1"
-            onkeydown="onKey(event)" oninput="grow(this)"></textarea>
+            onkeydown="onKey(event)" oninput="onUserEdit(this)"></textarea>
     </div>
 </div>
 
@@ -300,10 +301,21 @@
 const MODEL   = 'claude-sonnet-4-6';
 const API_URL = 'https://api.anthropic.com/v1/messages';
 
-const SYSTEM = `You are Suji (수지), a warm, patient, and encouraging Korean language teacher. Your student is an intermediate learner at TOPIK Level 2.
+const SYSTEM = `You are Suji (수지), a warm, patient, and encouraging Korean language teacher. Your student is a BEGINNER at TOPIK Level 1.
 
 STRICT RULES:
-1. Ask EXACTLY ONE simple conversational question per turn. Keep it at TOPIK Level 2 difficulty.
+1. Ask EXACTLY ONE simple conversational question per turn. Keep it at TOPIK Level 1 difficulty.
+1b. TOPIK LEVEL 1 MEANS (follow strictly):
+   • Your Korean sentences must be SHORT — 3 to 7 words. Never more than one clause.
+   • Use ONLY 해요체 (아/어요 endings). No 습니다, no 반말, no honorific 시.
+   • Stick to the ~800 most basic words: family, food, days, weather, hobbies,
+     school, work, places, shopping, time, feelings.
+   • Allowed grammar only: 이에요/예요, 있어요/없어요, 을/를, 이/가, 은/는, 에, 에서,
+     하고/와, 도, 안 + verb, 좋아해요, 지금/오늘/내일, simple past 았/었어요.
+   • AVOID: ~는데, ~니까, ~면서, ~잖아요, ~더라고요, long relative clauses, idioms,
+     Sino-Korean vocabulary the student is unlikely to know.
+   • If a word is even slightly advanced, put the English in (parentheses) right
+     after it the first time you use it.
 2. FORMAT: Write Korean first, then the English translation in (parentheses) on the very next line.
 3. CRITICAL TRANSLATION RULE — follow this precisely:
    • Korean present tense endings (아/어요, 습니다, 아/어, 이에요/예요) WITHOUT 고 있어요 → English SIMPLE PRESENT.
@@ -318,6 +330,32 @@ STRICT RULES:
 5. The student may mix English words into their Korean sentences when they don't know a word (e.g., "나는 school에 가요"). This is encouraged! When they do:
    - Fill in the Korean word naturally in your response: "맞아요! 학교 (school) — 나는 학교에 가요."
    - Praise them for trying and keep the conversation going.
+5b. IF THE STUDENT ANSWERS IN FULL ENGLISH (a whole sentence, no Korean),
+    it means they did not know how to say it. Never scold them and never
+    just reply in English. Do these THREE things, in this exact order:
+    (1) TEACH IT. Show how to say their sentence in Korean, using this format:
+        💬 한국어로 (In Korean):
+        "[their English sentence]"
+        → [the Korean sentence]
+        ([literal English of your Korean])
+        Simplify to TOPIK Level 1 Korean (3-7 words, 해요체). It is BETTER to
+        give a shorter, simpler Korean sentence they can actually use than a
+        perfect literal translation. If their sentence is long, split it into
+        two short Korean sentences.
+    (2) REACT to what they said, in Korean, with the English in (parentheses).
+    (3) ASK the next question, in Korean, with the English in (parentheses).
+    Leave a blank line between the three parts.
+    FULL EXAMPLE — student says "I ate pizza with my family yesterday":
+    💬 한국어로 (In Korean):
+    "I ate pizza with my family yesterday"
+    → 어제 가족하고 피자를 먹었어요.
+    (Yesterday I ate pizza with my family.)
+
+    와, 맛있었어요? 저도 피자를 좋아해요! 😊
+    (Wow, was it delicious? I like pizza too!)
+
+    주말에 뭐 해요?
+    (What do you do on the weekend?)
 6. React warmly to their answer before asking the next question.
 7. Use encouraging phrases: 잘했어요! 맞아요! 훌륭해요! 좋아요!
 8. Never repeat the same question you just asked.
@@ -339,6 +377,7 @@ let listening  = false;
 let recog      = null;
 let koVoice    = null;
 let finalText  = '';   // accumulates final STT chunks
+let inpPrevLen = 0;    // last known input length — lets us detect a user deletion
 let sendTimer  = null; // auto-send after silence
 
 // ═══════════════════════════════════════════════════════
@@ -411,9 +450,11 @@ function loadVoices() {
 function speakKo(rawText) {
     speechSynthesis.cancel();
 
-    // Strip English parentheticals and correction labels before speaking
+    // Strip English parentheticals and correction/teaching labels before speaking.
+    // (The taught Korean sentence on the "→" line is kept — hearing it is the point.)
     let t = rawText
         .replace(/✏️[^\n]*/g, '')
+        .replace(/💬[^\n]*/g, '')
         .replace(/\(([^)]*)\)/g, (_, inner) =>
             /[a-zA-Z]{3,}/.test(inner) ? '' : `(${inner})`)
         .replace(/[^가-힣㄰-㆏ᄀ-ᇿ\s!?,.:~·…—]/g, ' ')
@@ -478,37 +519,64 @@ function autoPlayAndListen(text) {
         const inp = document.getElementById('msg-input');
         inp.value = finalText + interim;
         grow(inp);
+        inpPrevLen = inp.value.length;
     };
 
     recog.onerror = e => {
+        // 'aborted' is always OUR doing — a language switch, a delete-flush, or
+        // a deliberate stop. Never tear the mic down for it, or switching
+        // languages silently kills the mic. 'no-speech' is just a silence gap
+        // in continuous mode; onend restarts us. Neither is a real error.
+        if (e.error === 'aborted' || e.error === 'no-speech') return;
+
         clearTimeout(sendTimer);
         stopMic();
-        const msgs = { 'no-speech': 'No speech — try again.', 'not-allowed': 'Microphone access denied.' };
+        const msgs = {
+            'not-allowed':   'Microphone access denied.',
+            'audio-capture': 'No microphone found.',
+        };
         setStatus(msgs[e.error] || 'Mic error: ' + e.error, 'red');
         setTimeout(() => setStatus(''), 3000);
     };
 
-    // Chrome stops recognition after ~60s; restart automatically if still listening
+    // Fires after every session end: Chrome's ~60s cutoff, a language switch,
+    // or a delete-flush. Restart whenever the user still wants the mic on.
+    // `listening` is the single source of truth — stopMic() clears it first,
+    // so a deliberate stop falls through here and stays stopped.
     recog.onend = () => {
-        if (listening) { try { recog.start(); } catch {} }
+        if (!listening) return;
+        // Chrome throws InvalidStateError if start() lands before the previous
+        // session has fully released; give it a beat, then retry once.
+        setTimeout(() => {
+            if (!listening) return;
+            try { recog.start(); }
+            catch {
+                setTimeout(() => {
+                    if (!listening) return;
+                    try { recog.start(); }
+                    catch { stopMic(); setStatus('Mic stopped — tap 🎤 to resume', 'red'); }
+                }, 300);
+            }
+        }, 80);
     };
 })();
 
-function toggleMic() { listening ? stopMicAndSend() : startMic(); }
+// The mic button ONLY starts/stops listening. It never sends — that is what
+// the ➤ button (and Enter) are for.
+function toggleMic() { listening ? stopMic() : startMic(); }
 
 function startMic() {
     if (!recog) return;
-    // Always start fresh — clear any leftover text from previous session
-    finalText = '';
     clearTimeout(sendTimer);
     const inp = document.getElementById('msg-input');
-    inp.value = '';
-    inp.style.height = 'auto';
+    // Keep whatever is already in the box — typed, or spoken in the other
+    // language. New speech appends to it rather than wiping it.
+    seedFinalText(inp.value);
     recog.lang = micLang;
     try { recog.start(); } catch { return; }
     listening = true;
     document.getElementById('mic-btn').classList.add('on');
-    setStatus(`🎤 Your turn — tap 🎤 again when done`, 'purple');
+    setStatus(micStatusText(), 'purple');
 }
 
 function stopMic() {
@@ -519,24 +587,27 @@ function stopMic() {
     setStatus('');
 }
 
-function stopMicAndSend() {
-    clearTimeout(sendTimer);
-    listening = false;
-    if (recog) recog.abort();
-    document.getElementById('mic-btn').classList.remove('on');
-    setStatus('');
-    const inp = document.getElementById('msg-input');
-    if (inp.value.trim()) setTimeout(send, 100);
-}
-
 function toggleMicLang() {
     micLang = micLang === 'ko-KR' ? 'en-US' : 'ko-KR';
     const isKo = micLang === 'ko-KR';
     const btn  = document.getElementById('lang-btn');
     btn.textContent = isKo ? '한' : 'EN';
     btn.classList.toggle('on', !isKo);
-    setStatus(`Mic switched to ${isKo ? 'Korean' : 'English'}`, 'purple');
-    setTimeout(() => setStatus(''), 2000);
+
+    if (listening) {
+        // Apply the new language to the LIVE session. recog.lang can only be
+        // set between sessions, so commit the box to finalText, then restart:
+        // abort() fires onend, which calls start() again because `listening`
+        // is still true. The mic never actually goes down and nothing is lost.
+        const inp = document.getElementById('msg-input');
+        seedFinalText(inp.value);
+        recog.lang = micLang;
+        try { recog.abort(); } catch {}
+        setStatus(micStatusText(), 'purple');
+    } else {
+        setStatus(`Mic set to ${isKo ? 'Korean' : 'English'}`, 'purple');
+        setTimeout(() => setStatus(''), 2000);
+    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -554,6 +625,34 @@ function grow(el) {
     el.style.height = Math.min(el.scrollHeight, 110) + 'px';
 }
 
+// The user typed or deleted in the box by hand. Their edit is authoritative:
+// resync the STT accumulator so a still-listening recogniser can't stamp the
+// old text back over the edit. (Assigning `.value` in code does NOT fire an
+// `input` event, so this only ever runs for genuine human edits.)
+// Seed the STT accumulator from whatever is already in the box, so newly
+// spoken words APPEND instead of replacing it. Adds a separating space.
+function seedFinalText(existing) {
+    finalText  = existing && !/\s$/.test(existing) ? existing + ' ' : existing;
+    inpPrevLen = existing.length;
+}
+
+function micStatusText() {
+    return `🎤 Listening · ${micLang === 'ko-KR' ? '한국어' : 'English'} — tap ➤ to send`;
+}
+
+function onUserEdit(el) {
+    grow(el);
+    const wasDeletion = el.value.length < inpPrevLen;
+    inpPrevLen = el.value.length;
+    finalText  = el.value;
+
+    // On a deletion, also restart the recognition segment. Words already spoken
+    // but not yet finalised are still queued inside the recogniser; without this
+    // they finalise a moment later and re-append the text just deleted.
+    // abort() fires onend, which restarts it because `listening` is still true.
+    if (listening && wasDeletion) { try { recog.abort(); } catch {} }
+}
+
 function onKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 }
@@ -566,6 +665,11 @@ function scrollBottom() {
 function fmtBubble(text) {
     return text
         .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        // "How to say it in Korean" teaching label
+        .replace(/(💬 한국어로)/g, '<span class="teach-label">$1</span>')
+        // Taught Korean sentence: a line that STARTS with → and is unquoted.
+        // Runs before the correction rule below, which uses a quoted → mid-line.
+        .replace(/^→ ([^"\n][^\n]*)$/gm, '→ <span class="fix-good">$1</span>')
         // Correction label
         .replace(/(✏️ 수정 \(Correction\):)/g, '<span class="fix-label">$1</span>')
         // Arrow + corrected text in green
@@ -705,6 +809,9 @@ async function send() {
 
     inp.value = '';
     grow(inp);
+    // Reset the STT accumulator too, or the sent text reappears on the next result
+    finalText  = '';
+    inpPrevLen = 0;
     addMsg('user', text);
 
     history.push({ role: 'user', content: text });
